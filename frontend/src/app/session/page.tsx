@@ -14,8 +14,9 @@ const STATE_CONFIG: Record<LiveState, { dot: string; label: string; pulse: boole
   thinking:   { dot: "bg-sky-400",     label: "Thinking…",   pulse: true  },
   seeing:     { dot: "bg-violet-400",  label: "Seeing…",     pulse: true  },
   listening:  { dot: "bg-rose-400",    label: "Listening…",  pulse: true  },
-  speaking:   { dot: "bg-emerald-400", label: "Speaking…",   pulse: true  },
-  error:      { dot: "bg-red-500",     label: "Error",       pulse: false },
+  speaking:     { dot: "bg-emerald-500", label: "Speaking…",   pulse: true  },
+  interrupted:  { dot: "bg-orange-400", label: "Interrupted",  pulse: false },
+  error:        { dot: "bg-red-500",    label: "Error",        pulse: false },
 };
 
 // ── Page ────────────────────────────────────────────────────────────────────

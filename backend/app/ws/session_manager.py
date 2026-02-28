@@ -103,6 +103,15 @@ async def handle_session(websocket: WebSocket) -> None:
                 "%s[audio] send failed session=%s: %s", _LOG, config.session_id, exc
             )
 
+    async def send_control(frame: dict) -> None:
+        """Push a JSON control frame (e.g. interruption) to the browser."""
+        try:
+            await websocket.send_json(frame)
+        except Exception as exc:
+            logger.warning(
+                "%s[control] send failed session=%s: %s", _LOG, config.session_id, exc
+            )
+
     # ── Browser receive loop ────────────────────────────────────────────────────
 
     async def handle_text_message(raw: str) -> None:
@@ -230,7 +239,12 @@ async def handle_session(websocket: WebSocket) -> None:
 
     receive_task = asyncio.create_task(receive_loop())
     bridge_task = asyncio.create_task(
-        client.run(receive_audio=receive_audio, send_audio=send_audio, config=config)
+        client.run(
+            receive_audio=receive_audio,
+            send_audio=send_audio,
+            config=config,
+            send_control=send_control,
+        )
     )
 
     await asyncio.gather(receive_task, bridge_task, return_exceptions=True)

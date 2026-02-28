@@ -23,6 +23,7 @@ export type LiveState =
   | "seeing"
   | "listening"
   | "speaking"
+  | "interrupted"
   | "error";
 
 function timestamp() {
@@ -37,8 +38,9 @@ export function useSessionSocket() {
   const [transcript, setTranscript]     = useState<TranscriptEntry[]>([]);
   const [isThinking, setIsThinking]     = useState(false);
   const [lastSentType, setLastSentType] = useState<"text" | "image">("text");
-  const [voiceActive, setVoiceActive]   = useState(false);
-  const [isSpeaking, setIsSpeaking]     = useState(false);
+  const [voiceActive, setVoiceActive]     = useState(false);
+  const [isSpeaking, setIsSpeaking]       = useState(false);
+  const [isInterrupted, setIsInterrupted] = useState(false);
 
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null);
@@ -53,17 +55,20 @@ export function useSessionSocket() {
 
   // ── Derived live state for the UI indicator ────────────────────────────────
 
+  const interruptedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const liveState = useMemo<LiveState>(() => {
     if (status === "error")      return "error";
     if (status === "connecting") return "connecting";
     if (status === "connected") {
-      if (isSpeaking)  return "speaking";
-      if (voiceActive) return "listening";
-      if (isThinking)  return lastSentType === "image" ? "seeing" : "thinking";
+      if (isInterrupted) return "interrupted";
+      if (isSpeaking)    return "speaking";
+      if (voiceActive)   return "listening";
+      if (isThinking)    return lastSentType === "image" ? "seeing" : "thinking";
       return "connected";
     }
     return "idle";
-  }, [status, isThinking, lastSentType, voiceActive, isSpeaking]);
+  }, [status, isThinking, lastSentType, voiceActive, isSpeaking, isInterrupted]);
 
   // ── Transcript helper ──────────────────────────────────────────────────────
 
@@ -123,9 +128,14 @@ export function useSessionSocket() {
       clearTimeout(speakingTimerRef.current);
       speakingTimerRef.current = null;
     }
+    if (interruptedTimerRef.current) {
+      clearTimeout(interruptedTimerRef.current);
+      interruptedTimerRef.current = null;
+    }
 
     setVoiceActive(false);
     setIsSpeaking(false);
+    setIsInterrupted(false);
     log.voice("Voice resources released");
   }, []);
 
@@ -186,6 +196,17 @@ export function useSessionSocket() {
         const data    = msg.data as Record<string, unknown>;
         const summary = typeof data.summary === "string" ? data.summary : "Session complete.";
         append({ role: "tutor", text: `✓ ${summary}`, timestamp: timestamp() });
+      } else if (msg.type === "status" && msg.value === "interrupted") {
+        log.voice("Barge-in: tutor interrupted by student");
+        // Clear speaking immediately; show "Interrupted" briefly then revert
+        setIsSpeaking(false);
+        if (speakingTimerRef.current) {
+          clearTimeout(speakingTimerRef.current);
+          speakingTimerRef.current = null;
+        }
+        setIsInterrupted(true);
+        if (interruptedTimerRef.current) clearTimeout(interruptedTimerRef.current);
+        interruptedTimerRef.current = setTimeout(() => setIsInterrupted(false), 900);
       } else if (msg.type === "error" && typeof msg.value === "string") {
         log.error("Server error", msg.value);
         setIsThinking(false);

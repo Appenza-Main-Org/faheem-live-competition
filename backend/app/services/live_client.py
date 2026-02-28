@@ -41,15 +41,19 @@ class LiveClient:
         receive_audio,   # async () -> bytes | None   (None signals end-of-stream)
         send_audio,      # async (bytes) -> None
         config: SessionConfig,
+        send_control=None,  # async (dict) -> None  (optional JSON control frames)
     ) -> None:
         """
         Open a Gemini Live session and bridge audio bidirectionally until the
         browser disconnects (receive_audio returns None).
+
+        send_control, if provided, is called with a JSON-serialisable dict to
+        push control frames (e.g. interruption notifications) to the browser.
         """
         if self._stub:
             await self._run_stub(receive_audio, send_audio, config)
         else:
-            await self._run_live(receive_audio, send_audio, config)
+            await self._run_live(receive_audio, send_audio, config, send_control)
 
     # ── Live mode ──────────────────────────────────────────────────────────────
 
@@ -58,6 +62,7 @@ class LiveClient:
         receive_audio,
         send_audio,
         config: SessionConfig,
+        send_control=None,
     ) -> None:
         """Real Gemini Live connection. Imports google.genai lazily."""
         from google import genai
@@ -76,7 +81,7 @@ class LiveClient:
                 self._upstream(session, receive_audio, config)
             )
             downstream_task = asyncio.create_task(
-                self._downstream(session, send_audio, config)
+                self._downstream(session, send_audio, config, send_control)
             )
 
             # Upstream exits when browser sends None (disconnect or END).
@@ -109,7 +114,7 @@ class LiveClient:
         except Exception as exc:
             logger.error("Upstream error [%s]: %s", config.session_id, exc)
 
-    async def _downstream(self, session, send_audio, config: SessionConfig) -> None:
+    async def _downstream(self, session, send_audio, config: SessionConfig, send_control=None) -> None:
         """Forward Gemini responses (audio + tool calls) to the browser."""
         from google.genai import types
 
@@ -126,6 +131,13 @@ class LiveClient:
                         config.session_id,
                     )
                     audio_chunks_sent = 0
+                    if send_control:
+                        try:
+                            await send_control({"type": "status", "value": "interrupted"})
+                        except Exception as exc:
+                            logger.warning(
+                                "[FaheemLive][backend][voice] send_control failed: %s", exc
+                            )
                     continue
 
                 # ── Tool call ──────────────────────────────────────────────────
