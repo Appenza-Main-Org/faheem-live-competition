@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Faheem Live | فهيم لايف",
-  description: "Real-time bilingual AI tutoring - English & Arabic",
+  title: "Faheem — Live Math Tutor",
+  description: "Real-time math tutoring powered by Gemini Live",
 };
 
 export default function RootLayout({

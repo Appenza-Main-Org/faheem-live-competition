@@ -1,35 +1,41 @@
 """
 Tool: generate_next_hint
 
-Generates a progressively more revealing hint for a stuck student.
-
-Placeholder implementation: returns static template strings.
-Wire up a Gemini text call to generate context-aware hints in production.
+Generates a progressively more revealing hint for a student stuck
+on a math problem.
 """
 
 from app.models.schemas import HintLevel
 
 
-def run(problem: str, hint_level: int = 1, language: str = "en") -> dict:
+def run(problem: str, hint_level: int = 1) -> dict:
     """
     Args:
-        problem:    Description of the exercise or word the student is stuck on.
-        hint_level: 1 = subtle nudge, 2 = partial reveal, 3 = full explanation.
-        language:   "en" or "ar" — for future localised hints.
+        problem:    The math problem the student is stuck on.
+        hint_level: 1 = strategy hint, 2 = partial step, 3 = full worked step.
 
     Returns:
-        dict with keys: hint, hint_level, language
+        dict with keys: hint, hint_level
     """
     level = HintLevel(min(max(hint_level, 1), 3))
 
     templates = {
-        HintLevel.SUBTLE: "Think about the root of the word and its related family.",
-        HintLevel.MODERATE: f"The answer is closely related to: {problem[:30]}...",
-        HintLevel.DIRECT: f"Here is the full answer: {problem}",
+        HintLevel.SUBTLE: (
+            f"Think about what operation or technique applies here. "
+            f"What does the structure of '{problem[:50]}' remind you of?"
+        ),
+        HintLevel.MODERATE: (
+            f"Start by identifying what you know and what you're solving for. "
+            f"For '{problem[:50]}', try setting it up step by step — what's the first operation?"
+        ),
+        HintLevel.DIRECT: (
+            f"Here's how to approach it: for '{problem[:80]}', "
+            f"begin by isolating the unknown, apply the relevant formula or rule, "
+            f"then simplify. Try working through it now."
+        ),
     }
 
     return {
         "hint": templates[level],
         "hint_level": level.value,
-        "language": language,
     }

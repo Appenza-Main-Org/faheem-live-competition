@@ -8,23 +8,14 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class Language(str, Enum):
-    ENGLISH = "en"
-    ARABIC = "ar"
-    AUTO = "auto"
-
-
-class DifficultyLevel(str, Enum):
-    BEGINNER = "beginner"
-    INTERMEDIATE = "intermediate"
-    ADVANCED = "advanced"
-
-
-class ProblemType(str, Enum):
-    VOCABULARY = "vocabulary"
-    GRAMMAR = "grammar"
-    PRONUNCIATION = "pronunciation"
-    COMPREHENSION = "comprehension"
+class MathProblemType(str, Enum):
+    ALGEBRA = "algebra"
+    GEOMETRY = "geometry"
+    ARITHMETIC = "arithmetic"
+    CALCULUS = "calculus"
+    STATISTICS = "statistics"
+    TRIGONOMETRY = "trigonometry"
+    WORD_PROBLEM = "word_problem"
     UNKNOWN = "unknown"
 
 
@@ -42,8 +33,6 @@ class AnswerVerdict(str, Enum):
 
 class SessionConfig(BaseModel):
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    target_language: Language = Language.AUTO
-    difficulty: DifficultyLevel = DifficultyLevel.BEGINNER
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

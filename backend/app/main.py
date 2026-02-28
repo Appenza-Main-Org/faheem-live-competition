@@ -12,7 +12,7 @@ logging.basicConfig(level=settings.log_level.upper())
 
 app = FastAPI(
     title="Faheem Live API",
-    description="Real-time bilingual tutoring backend powered by Gemini Live",
+    description="Real-time math tutoring backend powered by Gemini Live",
     version="0.1.0",
 )
 

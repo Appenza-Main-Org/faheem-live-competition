@@ -1,10 +1,7 @@
 """
 Tool: build_session_recap
 
-Produces a structured end-of-session summary.
-
-Placeholder implementation: assembles a plain-English paragraph from inputs.
-Wire up Firestore writes and richer summarisation in a future iteration.
+Produces a structured end-of-session math recap.
 """
 
 
@@ -17,9 +14,9 @@ def run(
     """
     Args:
         session_id:  Unique session identifier.
-        topics:      List of topics or vocabulary areas covered.
-        mistakes:    List of incorrect student answers recorded.
-        corrections: List of corrections provided by Faheem.
+        topics:      Math topics or problem types covered.
+        mistakes:    Incorrect student answers recorded.
+        corrections: Corrections provided by Faheem.
 
     Returns:
         dict with keys: session_id, topics_covered, mistakes, corrections,
@@ -29,22 +26,21 @@ def run(
     mistakes = mistakes or []
     corrections = corrections or []
 
-    lines = [f"Session {session_id} recap:"]
-    if topics:
-        lines.append(f"Topics covered: {', '.join(topics)}.")
-    if mistakes:
-        lines.append(f"Mistakes made: {len(mistakes)}.")
-    if corrections:
-        lines.append(f"Corrections provided: {len(corrections)}.")
-    lines.append("Great work today!")
-
     score = max(0.0, round(1.0 - len(mistakes) * 0.1, 2))
+
+    parts = ["Great math session!"]
+    if topics:
+        parts.append(f"Topics: {', '.join(topics)}.")
+    if mistakes:
+        parts.append(f"{len(mistakes)} mistake(s) — review the corrections above.")
+    else:
+        parts.append("No mistakes — well done.")
 
     return {
         "session_id": session_id,
         "topics_covered": topics,
         "mistakes": mistakes,
         "corrections": corrections,
-        "summary": " ".join(lines),
+        "summary": " ".join(parts),
         "score": min(score, 1.0),
     }

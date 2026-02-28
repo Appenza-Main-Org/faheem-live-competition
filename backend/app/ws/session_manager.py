@@ -10,22 +10,23 @@ Responsibilities:
 
 WebSocket message protocol:
   Browser → Server:
-    binary frame                                                  : raw PCM audio (16 kHz, 16-bit, mono)
-    text  "END"                                                   : graceful stop signal
-    text  {"type":"text","text":"..."}                            : student text message
-    text  {"type":"image","mimeType":"...","data":"...","caption":"..."} : base64 image
+    binary frame                                                        : raw PCM audio (16 kHz, 16-bit, mono)
+    text  "END"                                                         : graceful stop signal
+    text  {"type":"text","text":"...","mode":"explain|quiz|homework"}   : student text message
+    text  {"type":"image","mimeType":"...","data":"...","caption":"...","mode":"..."} : base64 image
 
   Server → Browser:
     {"type": "status",  "value": "connected", "session_id": "..."}   on open
     {"type": "message", "role": "tutor",      "text": "..."}         text reply
-    binary frame                                                      audio response
-    {"type": "recap",   "data": {...}}                                on close
+    binary frame                                                       audio response
+    {"type": "recap",   "data": {...}}                                 on close
     {"type": "error",   "value": "..."}                               on failure
 """
 
 import asyncio
 import json
 import logging
+import traceback
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -34,6 +35,31 @@ from app.models.schemas import SessionConfig
 from app.services.live_client import LiveClient
 
 logger = logging.getLogger(__name__)
+
+_LOG = "[FaheemLive][backend]"
+
+# Mode-specific addenda appended to the system prompt per request.
+# Keeps the base system_prompt.md clean and allows runtime mode switching.
+_MODE_ADDENDUM: dict[str, str] = {
+    "explain": (
+        "\n\n[Mode: Explain — break down the math concept step by step with a worked example. "
+        "Number each step. Keep it concise: one concept at a time, under 5 lines unless a "
+        "worked solution requires more. Use plain language for the reasoning.]"
+    ),
+    "quiz": (
+        "\n\n[Mode: Quiz — ask ONE focused math question appropriate to the topic discussed. "
+        "Wait for the student's answer before continuing. Give targeted feedback: "
+        "confirm correct steps, pinpoint the exact error if wrong. "
+        "Use check_answer and generate_next_hint tools. Keep the pace brisk.]"
+    ),
+    "homework": (
+        "\n\n[Mode: Homework — the student needs help solving their actual math problem. "
+        "Show all steps clearly with numbered work. Explain the reasoning at each step. "
+        "If they give a partial attempt, identify where it diverged. "
+        "Use hints to guide, but do not withhold the solution if the student is stuck. "
+        "Treat every image as a math problem unless clearly otherwise.]"
+    ),
+}
 
 
 async def handle_session(websocket: WebSocket) -> None:
@@ -44,7 +70,7 @@ async def handle_session(websocket: WebSocket) -> None:
     await websocket.accept()
 
     config = SessionConfig()
-    logger.info("Session started: %s", config.session_id)
+    logger.info("%s[session] created session_id=%s", _LOG, config.session_id)
 
     await websocket.send_json(
         {
@@ -73,7 +99,9 @@ async def handle_session(websocket: WebSocket) -> None:
         try:
             await websocket.send_bytes(audio_bytes)
         except Exception as exc:
-            logger.warning("Failed to send audio [%s]: %s", config.session_id, exc)
+            logger.warning(
+                "%s[audio] send failed session=%s: %s", _LOG, config.session_id, exc
+            )
 
     # ── Browser receive loop ────────────────────────────────────────────────────
 
@@ -82,21 +110,31 @@ async def handle_session(websocket: WebSocket) -> None:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
+            logger.warning("%s[ws] non-JSON text frame ignored", _LOG)
             return
 
         msg_type = data.get("type")
+        mode = str(data.get("mode", "explain"))
+        effective_prompt = agent.system_prompt + _MODE_ADDENDUM.get(mode, "")
 
+        # ── Text path ──────────────────────────────────────────────────────────
         if msg_type == "text":
             student_text = str(data.get("text", ""))
-            logger.info("Text message [%s]: %s", config.session_id, student_text)
-
-            reply = await client.generate_text_reply(
-                user_text=student_text,
-                system_prompt=agent.system_prompt,
-                history=chat_history,
+            logger.info(
+                "%s[route] text path | session=%s mode=%s text=%r",
+                _LOG, config.session_id, mode, student_text[:120],
             )
 
-            # Extend history so next turn has full context
+            logger.info("%s[text] calling Gemini text API...", _LOG)
+            reply = await client.generate_text_reply(
+                user_text=student_text,
+                system_prompt=effective_prompt,
+                history=chat_history,
+            )
+            logger.info(
+                "%s[text] Gemini replied | reply_len=%d", _LOG, len(reply)
+            )
+
             chat_history.append({"role": "user", "text": student_text})
             chat_history.append({"role": "model", "text": reply})
 
@@ -104,26 +142,37 @@ async def handle_session(websocket: WebSocket) -> None:
                 {"type": "message", "role": "tutor", "text": reply}
             )
 
+        # ── Image path ─────────────────────────────────────────────────────────
         elif msg_type == "image":
             mime = str(data.get("mimeType", "image/*"))
             caption = str(data.get("caption", "")).strip()
             image_b64 = str(data.get("data", ""))
+
             logger.info(
-                "Image message [%s]: mime=%s caption=%r",
-                config.session_id,
-                mime,
-                caption,
+                "%s[route] image path | session=%s mode=%s mime=%s caption=%r b64_len=%d",
+                _LOG, config.session_id, mode, mime, caption, len(image_b64),
             )
 
+            if not image_b64:
+                logger.warning("%s[image] empty base64 payload — skipping", _LOG)
+                await websocket.send_json(
+                    {"type": "message", "role": "tutor",
+                     "text": "I didn't receive an image. Please try uploading again."}
+                )
+                return
+
+            logger.info("%s[image] calling Gemini multimodal API...", _LOG)
             reply = await client.generate_image_reply(
                 image_b64=image_b64,
                 mime_type=mime,
                 caption=caption,
-                system_prompt=agent.system_prompt,
+                system_prompt=effective_prompt,
                 history=chat_history,
             )
+            logger.info(
+                "%s[image] Gemini replied | reply_len=%d", _LOG, len(reply)
+            )
 
-            # Record image turn in history as text so future turns have context
             history_text = f"[Image sent] {caption}" if caption else "[Image sent]"
             chat_history.append({"role": "user", "text": history_text})
             chat_history.append({"role": "model", "text": reply})
@@ -132,24 +181,49 @@ async def handle_session(websocket: WebSocket) -> None:
                 {"type": "message", "role": "tutor", "text": reply}
             )
 
+        else:
+            logger.warning(
+                "%s[ws] unknown message type=%r — ignored", _LOG, msg_type
+            )
+
     async def receive_loop() -> None:
+        audio_chunks_received = 0
         try:
             while True:
                 message = await websocket.receive()
                 if "bytes" in message and message["bytes"]:
+                    audio_chunks_received += 1
+                    if audio_chunks_received == 1:
+                        logger.info(
+                            "%s[voice] first PCM chunk received | session=%s",
+                            _LOG, config.session_id,
+                        )
+                    elif audio_chunks_received % 50 == 0:
+                        logger.debug(
+                            "%s[voice] PCM chunks received so far: %d | session=%s",
+                            _LOG, audio_chunks_received, config.session_id,
+                        )
                     await audio_queue.put(message["bytes"])
                 elif "text" in message:
                     if message["text"] == "END":
-                        logger.info("END received [%s]", config.session_id)
+                        logger.info(
+                            "%s[ws] END received | session=%s total_audio_chunks=%d",
+                            _LOG, config.session_id, audio_chunks_received,
+                        )
                         await audio_queue.put(None)
                         break
                     else:
                         await handle_text_message(message["text"])
         except WebSocketDisconnect:
-            logger.info("WebSocket disconnected [%s]", config.session_id)
+            logger.info(
+                "%s[ws] client disconnected | session=%s", _LOG, config.session_id
+            )
             await audio_queue.put(None)
         except Exception as exc:
-            logger.error("Receive loop error [%s]: %s", config.session_id, exc)
+            logger.error(
+                "%s[ws] receive loop error | session=%s: %s\n%s",
+                _LOG, config.session_id, exc, traceback.format_exc(),
+            )
             await audio_queue.put(None)
 
     # ── Run both tasks concurrently ────────────────────────────────────────────
@@ -167,7 +241,6 @@ async def handle_session(websocket: WebSocket) -> None:
     try:
         await websocket.send_json({"type": "recap", "data": recap.model_dump()})
     except Exception:
-        # WebSocket may already be closed if the browser disconnected
         pass
 
-    logger.info("Session ended: %s", config.session_id)
+    logger.info("%s[session] ended session_id=%s", _LOG, config.session_id)

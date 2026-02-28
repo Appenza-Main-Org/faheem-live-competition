@@ -1,9 +1,9 @@
 """
-TutorAgent — orchestrates the Faheem tutoring persona.
+TutorAgent — orchestrates the Faheem math tutoring persona.
 
 Responsibilities:
 - Loads the system prompt from prompts/system_prompt.md
-- Declares Gemini function schemas for all four tools
+- Declares Gemini function schemas for all four math tools
 - Dispatches tool calls received from Gemini to local tool functions
 - Accumulates session events and builds end-of-session recaps
 
@@ -39,15 +39,16 @@ _TOOL_SCHEMAS: list[dict] = [
     {
         "name": "detect_problem_type",
         "description": (
-            "Identify the type of language problem the student is facing: "
-            "vocabulary, grammar, pronunciation, or comprehension."
+            "Classify the type of math problem the student is working on. "
+            "Returns one of: algebra, geometry, arithmetic, calculus, "
+            "statistics, trigonometry, word_problem, or unknown."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "utterance": {
                     "type": "string",
-                    "description": "The student's spoken or written input.",
+                    "description": "The student's spoken or written math problem.",
                 },
                 "context": {
                     "type": "string",
@@ -60,16 +61,25 @@ _TOOL_SCHEMAS: list[dict] = [
     {
         "name": "check_answer",
         "description": (
-            "Verify whether the student's answer to a posed question is "
-            "correct, partially correct, or incorrect."
+            "Verify whether the student's answer to a math question is "
+            "correct, partially correct, or incorrect. Provide a correction "
+            "and brief explanation when wrong."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "question": {"type": "string"},
-                "student_answer": {"type": "string"},
-                "expected_answer": {"type": "string"},
-                "language": {"type": "string", "enum": ["en", "ar"]},
+                "question": {
+                    "type": "string",
+                    "description": "The math question that was posed.",
+                },
+                "student_answer": {
+                    "type": "string",
+                    "description": "The student's answer.",
+                },
+                "expected_answer": {
+                    "type": "string",
+                    "description": "The correct answer.",
+                },
             },
             "required": ["question", "student_answer", "expected_answer"],
         },
@@ -77,23 +87,23 @@ _TOOL_SCHEMAS: list[dict] = [
     {
         "name": "generate_next_hint",
         "description": (
-            "Generate a hint for a stuck student. Use hint_level=1 first, "
-            "escalate to 2 then 3 only if still stuck."
+            "Generate a progressively more revealing hint for a student stuck "
+            "on a math problem. Use hint_level=1 first, escalate to 2 then 3 "
+            "only if still stuck."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "problem": {
                     "type": "string",
-                    "description": "The exercise or word the student is stuck on.",
+                    "description": "The math problem the student is stuck on.",
                 },
                 "hint_level": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 3,
-                    "description": "1=subtle, 2=partial, 3=full explanation.",
+                    "description": "1=subtle strategy hint, 2=partial step, 3=full worked step.",
                 },
-                "language": {"type": "string", "enum": ["en", "ar"]},
             },
             "required": ["problem", "hint_level"],
         },
@@ -101,8 +111,8 @@ _TOOL_SCHEMAS: list[dict] = [
     {
         "name": "build_session_recap",
         "description": (
-            "Build a structured end-of-session summary. Call this when the "
-            "student says goodbye or signals they want to finish."
+            "Build a structured end-of-session recap. Call this when the "
+            "student says goodbye, finishes, or signals they are done."
         ),
         "parameters": {
             "type": "object",
@@ -111,17 +121,17 @@ _TOOL_SCHEMAS: list[dict] = [
                 "topics": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Topics or vocabulary areas covered.",
+                    "description": "Math topics or problem types covered in the session.",
                 },
                 "mistakes": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Incorrect student answers recorded.",
+                    "description": "Incorrect student answers recorded during the session.",
                 },
                 "corrections": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Corrections provided during the session.",
+                    "description": "Corrections or correct answers Faheem provided.",
                 },
             },
             "required": ["session_id"],
@@ -186,13 +196,14 @@ class TutorAgent:
         for fn_call in tool_call.function_calls:
             name = fn_call.name
             args = dict(fn_call.args)
-            logger.info("Tool call: %s(%s)", name, args)
+            logger.info("[FaheemLive][backend][tool] call: %s(%s)", name, args)
 
             if name in _TOOL_REGISTRY:
                 result = _TOOL_REGISTRY[name](**args)
+                logger.info("[FaheemLive][backend][tool] result: %s → %s", name, result)
             else:
                 result = {"error": f"Unknown tool: {name}"}
-                logger.warning("Unknown tool requested by Gemini: %s", name)
+                logger.warning("[FaheemLive][backend][tool] unknown tool: %s", name)
 
             self._events.append({"tool": name, "args": args, "result": result})
             results.append({"name": name, "result": result})
@@ -229,12 +240,16 @@ class TutorAgent:
 
         score = max(0.0, round(1.0 - len(mistakes) * 0.1, 2))
 
+        topics_str = f" Topics: {', '.join(topics)}." if topics else ""
+        mistakes_str = f" Mistakes: {len(mistakes)}." if mistakes else ""
+        summary = f"Math session complete.{topics_str}{mistakes_str}"
+
         return SessionRecap(
             session_id=config.session_id,
-            duration_seconds=0.0,  # TODO: wire up real timing
+            duration_seconds=0.0,
             topics_covered=[t for t in topics if t],
             mistakes=mistakes,
             corrections=corrections,
             score=min(score, 1.0),
-            summary=f"Session {config.session_id} complete.",
+            summary=summary,
         )

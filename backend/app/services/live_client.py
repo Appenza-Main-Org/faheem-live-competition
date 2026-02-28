@@ -113,10 +113,26 @@ class LiveClient:
         """Forward Gemini responses (audio + tool calls) to the browser."""
         from google.genai import types
 
+        audio_chunks_sent = 0
         try:
             async for response in session.receive():
+                # ── Interruption / barge-in event ──────────────────────────────
+                if (
+                    response.server_content
+                    and response.server_content.interrupted
+                ):
+                    logger.info(
+                        "[FaheemLive][backend][voice] barge-in / interruption [%s]",
+                        config.session_id,
+                    )
+                    audio_chunks_sent = 0
+                    continue
+
                 # ── Tool call ──────────────────────────────────────────────────
                 if response.tool_call:
+                    logger.info(
+                        "[FaheemLive][backend][voice] tool call [%s]", config.session_id
+                    )
                     results = await self._agent.dispatch_tool_calls(
                         response.tool_call
                     )
@@ -138,6 +154,18 @@ class LiveClient:
                     for part in response.server_content.model_turn.parts:
                         if part.inline_data and part.inline_data.data:
                             await send_audio(part.inline_data.data)
+                            audio_chunks_sent += 1
+
+                # ── Turn complete ──────────────────────────────────────────────
+                if (
+                    response.server_content
+                    and response.server_content.turn_complete
+                ):
+                    logger.info(
+                        "[FaheemLive][backend][voice] turn complete | audio_chunks=%d [%s]",
+                        audio_chunks_sent, config.session_id,
+                    )
+                    audio_chunks_sent = 0
 
         except asyncio.CancelledError:
             raise
@@ -196,6 +224,10 @@ class LiveClient:
             types.Content(role="user", parts=[types.Part(text=user_text)])
         )
 
+        logger.info(
+            "[FaheemLive][backend][text] Gemini request | model=%s history_turns=%d",
+            settings.gemini_text_model, len(history),
+        )
         try:
             response = await gai_client.aio.models.generate_content(
                 model=settings.gemini_text_model,
@@ -204,9 +236,13 @@ class LiveClient:
                     system_instruction=system_prompt,
                 ),
             )
-            return response.text or ""
+            text = response.text or ""
+            logger.info(
+                "[FaheemLive][backend][text] Gemini OK | reply_len=%d", len(text)
+            )
+            return text
         except Exception as exc:
-            logger.error("Text API error: %s", exc)
+            logger.error("[FaheemLive][backend][text] Gemini FAILED | %s", exc)
             return "Sorry, I ran into a problem. Please try again."
 
     # ── Image reply (multimodal, standard generate API) ───────────────────────
@@ -234,9 +270,9 @@ class LiveClient:
         """
         if self._stub:
             return (
-                f"[Stub] I see your image! — أرى صورتك! "
-                f"{'You wrote: ' + caption + ' — ' if caption else ''}"
-                "What would you like to learn from it?"
+                f"[Stub] I can see your math problem! "
+                f"{'Caption: ' + caption + '. ' if caption else ''}"
+                "Let me work through it step by step."
             )
         return await self._call_image_api(image_b64, mime_type, caption, system_prompt, history)
 
@@ -263,23 +299,41 @@ class LiveClient:
             for entry in history
         ]
 
-        # Build the new user turn: image part + optional caption text
+        # Decode base64 → raw bytes
+        logger.info(
+            "[FaheemLive][backend][image] decoding base64 | b64_len=%d mime=%s",
+            len(image_b64), mime_type,
+        )
         try:
             image_bytes = base64.b64decode(image_b64)
+            logger.info(
+                "[FaheemLive][backend][image] decode OK | bytes=%d", len(image_bytes)
+            )
         except Exception as exc:
-            logger.error("Failed to decode image base64: %s", exc)
+            logger.error(
+                "[FaheemLive][backend][image] base64 decode FAILED | %s", exc
+            )
             return "Sorry, I couldn't read that image. Please try again."
 
+        # Build the new user turn: image part + text instruction
         user_parts = [
             types.Part(
                 inline_data=types.Blob(data=image_bytes, mime_type=mime_type)
             )
         ]
-        if caption:
-            user_parts.append(types.Part(text=caption))
+        # Always include a text part so Gemini has clear instruction alongside the image.
+        # If the student provided a caption/question, use it; otherwise use a default prompt.
+        user_parts.append(
+            types.Part(text=caption if caption else
+                       "This is a math problem. Please identify it and solve it step by step.")
+        )
 
         contents.append(types.Content(role="user", parts=user_parts))
 
+        logger.info(
+            "[FaheemLive][backend][image] calling Gemini multimodal API | model=%s history_turns=%d",
+            settings.gemini_text_model, len(history),
+        )
         try:
             response = await gai_client.aio.models.generate_content(
                 model=settings.gemini_text_model,
@@ -288,9 +342,17 @@ class LiveClient:
                     system_instruction=system_prompt,
                 ),
             )
-            return response.text or ""
+            text = response.text or ""
+            logger.info(
+                "[FaheemLive][backend][image] Gemini OK | reply_len=%d reply_preview=%r",
+                len(text), text[:80],
+            )
+            return text
         except Exception as exc:
-            logger.error("Image API error: %s", exc)
+            logger.error(
+                "[FaheemLive][backend][image] Gemini FAILED | %s\n%s",
+                exc, __import__("traceback").format_exc(),
+            )
             return "Sorry, I had trouble analysing that image. Please try again."
 
     # ── Stub mode ──────────────────────────────────────────────────────────────
