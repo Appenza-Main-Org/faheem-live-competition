@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSessionSocket, LiveState } from "@/hooks/useSessionSocket";
 import TranscriptPanel from "@/components/TranscriptPanel";
 import ModeSelector, { type TutorMode } from "@/components/ModeSelector";
@@ -25,7 +25,8 @@ export default function SessionPage() {
   const [imageFile, setImageFile]     = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [text, setText]               = useState("");
-  const fileInputRef                  = useRef<HTMLInputElement>(null);
+  const fileInputRef      = useRef<HTMLInputElement>(null);
+  const autoVoiceRef      = useRef(false);   // set true when Start auto-triggers voice
 
   const {
     status,
@@ -44,6 +45,14 @@ export default function SessionPage() {
 
   const state   = STATE_CONFIG[liveState];
   const canSend = isActive && (imageFile !== null || text.trim().length > 0);
+
+  // ── Auto-start voice once session is live ──────────────────────────────────
+  useEffect(() => {
+    if (liveState === "connected" && autoVoiceRef.current) {
+      autoVoiceRef.current = false;
+      startVoice();
+    }
+  }, [liveState, startVoice]);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -222,12 +231,12 @@ export default function SessionPage() {
           rows={1}
           placeholder={
             voiceActive
-              ? "Listening… say your math problem or type it"
+              ? "Listening… speak or type your math problem"
               : imageFile
               ? "Ask about the problem in the image… (optional)"
               : isActive
               ? "Type a math problem… (Enter to send)"
-              : "Start a session to begin…"
+              : "Click Start to begin — mic starts automatically"
           }
           dir="auto"
           className="
@@ -255,7 +264,14 @@ export default function SessionPage() {
 
         {/* Start / End session */}
         <button
-          onClick={isActive ? stopSession : startSession}
+          onClick={() => {
+            if (isActive) {
+              stopSession();
+            } else {
+              autoVoiceRef.current = true;  // auto-start voice once connected
+              startSession();
+            }
+          }}
           disabled={status === "connecting"}
           className={`
             flex-none px-4 h-10 rounded-xl text-sm font-semibold whitespace-nowrap

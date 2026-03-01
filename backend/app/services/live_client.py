@@ -115,10 +115,12 @@ class LiveClient:
             logger.error("Upstream error [%s]: %s", config.session_id, exc)
 
     async def _downstream(self, session, send_audio, config: SessionConfig, send_control=None) -> None:
-        """Forward Gemini responses (audio + tool calls) to the browser."""
+        """Forward Gemini responses (audio + text + tool calls) to the browser."""
         from google.genai import types
 
         audio_chunks_sent = 0
+        turn_text_parts: list[str] = []  # accumulate text parts within a turn
+
         try:
             async for response in session.receive():
                 # ── Interruption / barge-in event ──────────────────────────────
@@ -131,6 +133,7 @@ class LiveClient:
                         config.session_id,
                     )
                     audio_chunks_sent = 0
+                    turn_text_parts = []  # discard partial turn text
                     if send_control:
                         try:
                             await send_control({"type": "status", "value": "interrupted"})
@@ -158,7 +161,7 @@ class LiveClient:
                     )
                     continue
 
-                # ── Audio output ───────────────────────────────────────────────
+                # ── Audio + text output ────────────────────────────────────────
                 if (
                     response.server_content
                     and response.server_content.model_turn
@@ -167,6 +170,8 @@ class LiveClient:
                         if part.inline_data and part.inline_data.data:
                             await send_audio(part.inline_data.data)
                             audio_chunks_sent += 1
+                        elif part.text:
+                            turn_text_parts.append(part.text)
 
                 # ── Turn complete ──────────────────────────────────────────────
                 if (
@@ -174,10 +179,30 @@ class LiveClient:
                     and response.server_content.turn_complete
                 ):
                     logger.info(
-                        "[FaheemLive][backend][voice] turn complete | audio_chunks=%d [%s]",
-                        audio_chunks_sent, config.session_id,
+                        "[FaheemLive][backend][voice] turn complete | audio_chunks=%d text_parts=%d [%s]",
+                        audio_chunks_sent, len(turn_text_parts), config.session_id,
                     )
+                    # If Gemini returned text alongside audio, send it as a
+                    # transcript entry so the conversation is visible in the UI.
+                    if turn_text_parts and send_control:
+                        full_text = "".join(turn_text_parts).strip()
+                        if full_text:
+                            try:
+                                await send_control({
+                                    "type": "message",
+                                    "role": "tutor",
+                                    "text": full_text,
+                                })
+                                logger.info(
+                                    "[FaheemLive][backend][voice] sent voice transcript | len=%d [%s]",
+                                    len(full_text), config.session_id,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "[FaheemLive][backend][voice] transcript send failed: %s", exc
+                                )
                     audio_chunks_sent = 0
+                    turn_text_parts = []
 
         except asyncio.CancelledError:
             raise

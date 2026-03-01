@@ -36,7 +36,7 @@ export default function TranscriptPanel({
             Your math tutor is ready
           </p>
           <p className="text-sm text-slate-500 mt-1.5">
-            Press <span className="text-emerald-400 font-semibold">Start</span> — type a problem, speak it, or snap a photo
+            Press <span className="text-emerald-400 font-semibold">Start</span> — mic starts automatically, or type/snap a problem
           </p>
         </div>
         <div className="flex gap-3 mt-1 text-xs text-slate-600">
